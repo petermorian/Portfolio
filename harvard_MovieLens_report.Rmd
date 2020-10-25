@@ -1,0 +1,189 @@
+---
+title: "Movie Recommendation System"
+author: "2020"
+date: "Professional Certificate in Data Science"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_crop: no
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(grid)
+library(gridExtra)
+library(grDevices)
+opts_chunk$set(echo = TRUE)
+theme_set(theme_pubr()) #set theme for plots
+
+# add location of rdata file here! Either from github or by running the R file and using outputted Rdata file.
+load("~.Rdata") #load objects from rdata file
+```
+
+# Introduction
+
+## Purpose
+The purpose of this report is to develop a movie recommendation system through the use of machine learning algorithims. This report is a part of the Professional Certificate in Data Science program by HarvardX & edX.
+
+The database used is a subset of the MovieLens dataset. It contains historical information about movie ratings, along with their associated movie titles & genres. The full dataset can be found [here](https://grouplens.org/datasets/movielens/latest/). 
+
+Before developing the model that will be used for recommendations, this report will firstly give a high-level overview of the sample data, as well the discuss key characteristsics of the sample data, and justify any trasnformations. We will then build multiple machine learning models to predict movie ratings and determine which of these models is the best at predicting ratings.
+
+## Executive Summary
+After analysing the relationships between specific variables, the final prediction model built was a penalised least squares model, which takes into account the movie, user & genre effects of a rating. When compared to the validation dataset, the RMSE is `r Final_RMSE`.
+
+
+# Method & Analysis
+
+## Background
+
+The Movielens sample data was paritioned into a 90-10 split. The 90% portion, which will be referred to as the "edx" dataset, will be the main focus of this report, as this is where will derive the training and test dataset for model building. The following sub-sections will provide an explaination into the structure of the edx data, as well as explain key transformations and insights. After this, we will then proceed into the model building stage. The 10% portion is the validation data, which will be used the the Results section of this report.
+
+## Initial Data Inspection
+
+The edx dataset conatins `r rows_edx` rows and `r cols_edx` columns. There are `r numb_movies_edx` different movies reviewed by `r numb_users_edx` unique users. The median number of reveiws for a single movie is `r med_users_movie`, whilst the median number of movies reviewed by a single reviewer is `r med_movies_user`. To give the reader a clear understanding of the edx dataset, the first few rows are shown below, as well as the summary statistics of each column:
+``` {r initial view, echo=FALSE}
+kable(head_edx, caption="First few rows of the edx dataset")
+kable(summ_stats_edx, caption="Summary Statistics of the edx dataset")
+```
+
+Since the purpose of this project is to develop a movie recommendation system based off ratings, below is a brief summary of the ratings within edx. Note that there are no 0 ratings.
+```{r initial ratings, echo=FALSE}
+kable(ratings_prop, caption="Ratings by count & proportion")
+```
+
+## Data Cleaning 
+As shown in Table 1, the current form of the timestamp, title & genre columns are not ideal for analysis. This section describes the procedures made to the edx data to "clean" these columns. Non-numeric & non-integer columns were then removed from the edx dataset in order to make the size of the data smaller and to make the model building process more efficient. Duplicate rows were also removed. After cleaning, the edx dataset that will be used for model building now conatins `r cols_edx_clean` columns and `r rows_edx_clean`rows.
+
+### Movie Title & Years
+The title column in edx contains the name of the movie, as well as the year of release. Since the year of release could be a potential parameter in our model, it is ideal for us to separate this information into a new column. Note that the 'title' & "title_name" columns were not included in the training/test datasets for the model builing stage.
+``` {r clean titles and year, echo=FALSE}
+kable(head_edx_clean %>% select(title, title_name, year_made), caption="First six rows of clean movie titles & year")
+```
+
+### Rating Timestamps
+The timestamps of user reviews in the edx data are unreadable to humans. As such, the first cleaning process with regards to the timestamp column is to convert the data into readable dates and times. Furthermore, additional columns were made to separate the date, weekday (where 1 = Monday, 2 = Tuesday, ..., 7 = Sunday), day, month, year and hour (24-hour format) of reviews, as these could be of potential value in the model building stage. Another column that was added was diff_years, which is the difference in the number of years between rating year and release year. Note that the "timestamp", "ts_date_time" & "ts_date" columns were not included in the training/test datasets for the model builing stage.
+``` {r clean timestamps, echo=FALSE}
+kable(head_edx_clean %>% select(timestamp, ts_date_time, ts_date,  ts_weekday, ts_day, ts_month, ts_year, ts_hour, diff_years), caption="First six rows of clean timestamps & diff_years")
+```
+
+### Genres
+The genres column in edx concatenates the all the genres of a movie into one string. Should there be a need to include movie genres as a predictor in the movie recommendation model, this view of concatenating genres is not ideal for analysis. Thus, twenty new columns were added to the edx data, where each is a binary indicator of where a movie is a part of that genre. This allows us to separate each genre for analysis. Note that these all twenty extra columns were not used in the model builing stage. 
+``` {r clean generes, echo=FALSE}
+kable(head_edx_clean %>% select(genres, Comedy, Romance, Action, Crime, Drama, `Sci-Fi`, Thriller), caption="First six rows of clean genres (7 of 20 shown)")
+```
+
+
+## Data Analysis
+
+In this section, we will derive some preliminary insights from the cleaned edx data. 
+
+Firstly, we will look at the mean rating over time. For movie release years on the left, the mean rating has been declining since the 1970's. For rating years on the right, the mean rating has been declining. Note that ratings in 1995 were removed  due to low volumes. 
+```{r rating OT graph, fig.show="hold", out.width = "50%", out.height = "50%", echo=FALSE}
+mean_ratings_release_OT
+mean_ratings_OT
+```
+
+When charting the number of movies released per year, we can see that the volume grows signifiantly over time. This seems logical due to the general growth of the movie industry, increasing demand for movies, as well as the growth & accessibility of technology. Furthermore, the chart to the right shows the number of ratings per release year, which as expected, matches the trend in the number of movies made.
+```{r users OT graph, fig.show="hold", out.width = "50%", out.height = "50%", echo=FALSE}
+movie_volumes_OT
+users_volumes_OT
+```
+
+When looking ot the years between rating year and release year, we can see that whilst most movies are reviewed pretty quickly after relase, the mean rating tends to be higher for movies that are reviewed later on - this could potentially be due to nostalgia effects. 
+```{r diff years graph, fig.show="hold", out.width = "50%", out.height = "50%", echo=FALSE}
+diff_years_ratings_OT
+diff_years_volumes_OT
+```
+
+We will now look into trends per genre. Below is a summary table of the number of movies, number of user ratings & median rating, per genre. The proportions of each value against all other genres are also recorded, and the table is ordered by movie volume. We can see that the median rate per genre is between 3.26 (Horror) and 3.78 (Drama). One interesting finding to note is that the number of users per genre is fairly constant, despite the disparity of movie volumes per genre. 
+```{r genre table, echo=FALSE}
+kable(Genre_all_table, caption="Number of movies, User reviews & Median rating, per Genre")
+```
+
+The next few charts will now look at genres over time. Note that we have only considered the top ten genres by movie volume for plotting, as this comprises 86% of the entire edx dataset. We will firstly examine the volume proportions of movies per release year by genre. We can see that since the 1930's, the proportion of genres has remain faily stable over time, with Drama and Comedy being the most popular genres made. When charting the volume propotions of user ratings over time by genre, we can see that each proportion is stable over time.
+```{r genre volume users, fig.show='hold', out.width = "50%", out.height = "50%",echo=FALSE}
+movies_genre_OT
+users_genres_OT
+```
+
+The below chart shows the median rating over time by genre. Whilst being rather volatile, this shows that all genres have had a median rating generally between 3 and 4 over all release years.
+```{r genre rating, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+ratings_genres_OT
+```
+
+Since we have separated the timestamp column to different time values, we will now look into any potential trends in the mean rating for each genre per hour, month and weekday of review. From the chart below, we can see that the hour of review does not tend to have any significant impact on ratings per genre. However, the mean ratings of each genre are significantly separated. 
+```{r genre hour, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+hours_genres_OT
+```
+
+Per month, the mean rating reamains fairly stable throughout the year. But again, the genre trends are clearly separated.
+```{r genre month, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+months_genres_OT
+```
+
+Finally, we will now look into the trend in the weekdays of reviews. Once again, the rating does not appear to signifiancantly alter over the week, but genres are separted.
+```{r genre weekday, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+weekday_genres_OT
+```
+
+## Model Building
+Noting the analysis that we done in previous sections of this report, in this section we will now look into bulding a few machine learning models to predict the ratings of movies. To produce the training & testing data, the cleaned edx dataset was split 80/20. Also, with regards to the "genres" column, each row was separated into its specific genre, as this will be used later on in the model building process. There are `r nrow_edx_train` rows in the training data and `r nrow_edx_test` rows in the testing data. Models were build using the training set, and then compared to the test set via RMSE, in order to determine if additional parameters are need before a final model can be selected. The final model, as well as the use of the validation set, are explained in the next section of this report.
+
+### Mean
+The first model that will be examined is simple mean of all ratings from the test dataset. This is shown in the formula below, where $u,m$ refers to each user & movie pairing.
+$$rating_{u,m} = \mu+\epsilon_{u,m}$$
+
+Whilst this is not expected to be the final model, it does provide us with a benchmark. When compared to the test dataset, the RMSE of this model is `r first_rmse`.
+
+### Movie Effects
+To improve on the above model, the average rating of each movie should be added to the model, as this will remove any movie bias from our model. When compared to the test dataset, the RMSE of this model is `r movie_rmse`.
+$$rating_{u,m} = \mu + movie_m + \epsilon_{u,m}$$
+
+### User Effects
+In addition, some users will tend to follow a certian patten of ratings. Thus, any user bias should be removed by taking the mean rating for each user as well. When compared to the test dataset, the RMSE of this model is `r movie_user_rmse`.
+$$rating_{u,m} = \mu + movie_m + user_u + \epsilon_{u,m}$$
+
+### Genre Effects
+As seen in the previous Analysis section, there appears to be biases in ratings based on Genre, where ratings by genres tended to remain fairly stable over all different time measures. As such, these biases should be accounted for in our model, as shown below. As previously mentioned, the "genre" column had concatenations of all the genres. When compared to the test dataset, the RMSE of this model is `r movie_user_genre_rmse`.
+$$rating_{u,m} = \mu + movie_m + user_u + genre_m + \epsilon_{u,m}$$
+
+
+### Penalised Least Squares
+Movies with ratings that are signifiantcly above or below our estimate will constrian our model's predictability. By accounting for the sample size of each effect through the use of a penalisation parameter, $\lambda$, we are able to make the model less variable. The penslisation parameter is applied to each mean grouping in the following way:
+$$pen.movie_m = \sum(rating_{u,m} - \mu) /(n+\lambda) $$
+$$pen.user_u = \sum(rating_{u,m} - \mu - pen.movie_m) /(n+\lambda) $$
+$$pen.genre_m = \sum(rating_{u,m} - \mu - pen.movie_m - pen.user_u) /(n+\lambda) $$
+
+Resulting in a similar model as previously described, but with different parameters:
+$$rating_{u,m} = \mu + pen.movie_m + pen.user_u + pen.genre_m + \epsilon_{u,m}$$
+
+To pick a suitable value for the penalisation parameter, the previous model with movie, user & genre effects accounted for was used to pick the value of $\lambda$ that returns the lowest RSME against the test set. The results of each run are shown in the chart below, which shows us that the most suitable value is $\lambda =$ `r lambda_min`.
+```{r lambda graph, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+lambda_plot
+```
+
+When compared to the test dataset, the RMSE of this model is `r movie_user_genre_rmse_reg`.
+
+
+# Results
+The final model that will used is the penalised least squares model, which accounts for movie, user and genre effects in ratings. This was selected as it had the lowest RMSE against the test dataset.
+```{r test rmse table, echo=FALSE}
+kable(test_rmse_table, caption="Model Results against Test Set")
+```
+
+To check the accuary of our final model, the RSME of predicted ratings were calculated against the ratings in the validation dataset, which results in a final RMSE of `r Final_RMSE`.
+
+# Conclusion
+## Summary of Findings
+As shown by the final model's RSME against the validation dataset, this model is a prettygood indicator of movie ratings from the sample Movelens data. The analysis showed that the movie itself, the specifc user, as well as the genre of a movie, are the primary indicators of a movie's rating. 
+
+## Suggested Improvements
+Whilst the above 3 effects were modeled, it should noted that there could potentially be more parameters that we could consider in the model. For example, the date & timestamp of a rating could have been used to predict ratings. This was not considered in the model reported as the validation RMSE was already sufficiently sound once the Genre effect was condisered. Additonally, whilst it is known that a model with more parameters is always going to lead to a better fit of the data (i.e. a lower RMSE), there must be a balance between model fit and predictability. The addition of too many parameters would lead to over-fitting and lower predictive power of a model.
+
+Other suggestion for future models would be to consider other machine learning techniques such as K-Nearest Neghours or XGBoost. Due to machine limitations, I was unable to run a complex machine learning model with such a large dataset as the edx data. However, if the dataset was smaller, it would be more feasible to try out other models.
