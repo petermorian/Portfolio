@@ -1,0 +1,237 @@
+---
+title: "Predicting Financial Instability in Africa"
+author: "Peter Morian"
+date: "Professional Certificate in Data Science - 2020"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_crop: no
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(data.table)
+library(grid)
+library(gridExtra)
+library(grDevices)
+library(kableExtra)
+opts_chunk$set(echo = TRUE)
+theme_set(theme_pubr()) #set theme for plots
+
+# add location of rdata file here! Either from github or by running the R file and using outputted Rdata file.
+load("~.Rdata") #load objects from rdata file
+```
+
+# Introduction 
+
+## Motivation 
+The purpose of this report is to develop a machine learning model that is able to predict the financial stability of an African country, based off its economic factors. The overall motivation of this report is to better undertsand the complexity and the sensitivity of the African financial system. The database used is a subset of the Reinhart et. al's Global Financial Stability dataset which can be found [here](https://www.hbs.edu/behavioral-finance-and-financial-stability/data/Pages/global.aspx). Column names have been renamed before any cleaning or analysis was be conducted, to make references to columns shorter. This report is a part of the Professional Certificate in Data Science program by HarvardX & edX.
+
+Before developing the model that will be used for predicting financial instability, this report will firstly provide a high-level overview of the sample data, as well the discuss key characteristsics of the data and justify any trasnformations. We will then build multiple machine learning models to predict systemic crises within the African economy, and determine which of these models is the best at predicting financial instability.
+
+## Executive Summary
+After analysing the relationships between specific variables, the final model for predicting a systemic crisis was built using a Random Forest model, which takes into account the Exchange rate, Inflation rate & GDP weighted debt of an economy, as well as indicators of Banking and Soverign debt crises. When compared to the test dataset, the accuracy of the Random Forest model is `r round(Accuracy_random_forest,3)`.
+
+
+
+# Method & Analysis
+
+## Background
+The collected data will be refered to as the African Crises dataset throughtout this report. The following sub-sections will provide insights into the structure of the African Crises dataset, as well as explain key transformations and insights. After this, we will then proceed into the model building stage. 
+
+The African Crises data was paritioned into a 80-20 split. The 80% partion will be referred to as the training dataset, which will be the main focus of the model building stage in this report. The remaining 20% partion will be refered to as the test dataset, which will be used the the Results section of this report.
+
+## Initial Data Inspection
+The African Crises dataset contains `r rows_africa` rows and `r cols_africa` columns, with the economic information of `r numb_countries` different African countries over `r numb_years` years, from `r min_years` to `r max_years`. A summary of what each column reprsents is as follows:
+
++ *caseA*: Number denoting a specific country.
++ *cc3A*: Three letter abbreviation of the country name.
++ *Country*: Name of the country.
++ *Year*: The year of observation.
++ *Syst*: "0" means that no systemic crisis occurred in a given year, whilst "1" means that a systemic crisis occurred. A systemic crisis is defined as an economy-wide stress which typically leads to the breakdown of financial institutions. This variable can be essentially viewed as a "recession" indicator, and will be the focus of this report.
++ *EX*: The exchange rate of the country against the USD, at the year of observation.
++ *Dom*: "0" means that no sovereign domestic debt default occurred in a given year, whilst "1" means that a sovereign domestic debt default occurred. 
++ *Sov*: "0" means that no sovereign external debt default occurred in a given year, whilst "1" means that a sovereign external debt default occurred.
++ *GDP_w*: The total debt in default relative to the economy's GDP.
++ *CPI*: The annual CPI Inflation rate.
++ *Ind*: "0" means the economy was not independent in a given year, whilst "1" means that it was independent.
++ *Curr*: "0" means that no currency crisis occurred in a given year, whilst "1" means that a currency crisis occurred.
++ *Infl*: "0" means that no inflation crisis occurred in a given year, whilst "1" means that an inflation crisis occurred.
++ *Bank*: "no_crisis" means that no banking crisis occurred in a given year, whilst "crisis" means that a banking crisis occurred.
+
+To give the reader a clear understanding of the dataset, the first few rows are shown below.
+
+``` {r initial view, echo=FALSE}
+kable(head_africa, "latex", booktabs = T, caption="First few rows of the African Crises dataset", linesep = "") %>%
+kable_styling(latex_options = c("hold_position", "scale_down"))
+```
+
+Since the purpose of this project is to predict financial instability, below is a brief summary of the number of systemic crisies recorded per country.
+```{r initial systemic, echo=FALSE}
+kable(crisis_summary, "latex", booktabs = T, caption="Systemic Crises by African Country", linesep = "") %>%
+kable_styling(latex_options = c("hold_position"))
+```
+
+## Data Cleaning 
+As shown in Table 1, the current form of some columns are not ideal for analysis. Additional columns are reqired to look at country-specific impacts. This section describes the procedures made to the African Crises data to "clean" these columns.
+
+Besides *Country*, non-numeric & non-integer columns were then removed from the dataset in order to make the size of the data smaller and to make the model building process more efficient. Duplicate rows were also removed. After cleaning, the dataset that will be used for model building now conatins `r rows_africa_clean` rows and `r cols_africa_clean` columns.
+
+### Reformat Banking Crisis
+The indicator column for a banking crisis, *Bank*, was originally a charater column. To make the modelling process for efficient with a smaller file side, numeric values were used to replace the existing character values. Now, "0" means that no banking crisis occurred in a given year, whilst "1" means that a banking crisis occurred.
+
+### Exchange Rate & Inflationary Annual Changes
+Since the exchange rate and the inflation rate can vary significantly by country, it may be hard to include these variables in a model are their values are not standardised to the entire dataset. Thus, two additonal columns were created that measure the year-by-year percentage change in rates per country, which are called *EX_change* & *CPI_change* respectively. 
+```{r ex & infl change, echo=FALSE}
+kable(head(setDT(africa_data %>% 
+        select(Country, Year, EX, EX_change, CPI, CPI_change))), 
+      "latex", 
+      booktabs = T, 
+      caption="Exchange rate and Inflationary Annual Changes", 
+      linesep = "") %>% 
+  kable_styling(latex_options = "hold_position")
+```
+
+
+### Reformat Currency Crisis 
+An issue that was spotted in the African Crises dataset was that the *Curr* column had some values of "2", which is not a valid option for this indicator variable.
+``` {r currency 2, echo=FALSE}
+kable(curr_crisis_2 %>% select(Curr, everything()), "latex", booktabs = T, caption="Rows with Currency Crisis 2", linesep = "") %>%
+  column_spec(1, bold=T) %>%
+  kable_styling(latex_options = c("hold_position", "scale_down"))
+```
+Whilst this was only a small number of obvservations with this error, it is still worthwhile to clean these observations. Each row with this error was checked against the original Reinhart et. al source data, and it was confirmed that each of these rows were valid currency crises. This means that "1" should be used instead of "2". The adjustments were made, and now all values of *Curr* are either "0" or "1".
+
+### Other Procedures
+It should be noted that the *case* & *cc3* columns were removed from the African Crises dataset, as the represent the same information as other columns, and are thus redundant. 
+
+Futhermore, whilst there was a check conducted to remove any duplicate observation rows from the cleaned dataset, it should also be noted that there were no duplicate rows found.
+
+After all the previously discussed procedues were run, the cleaned African Crises dataset has `r rows_africa_clean` rows and `r cols_africa_clean` columns. Below is a brief view of the cleaned data, which is now ready for analysis and modelling.
+``` {r clean view, echo=FALSE}
+kable(head_africa_data_clean, "latex", booktabs = T, caption="First few rows of the cleaned African Crises dataset", linesep = "") %>%
+kable_styling(latex_options = c("hold_position", "scale_down"))
+```
+
+## Data Analysis
+In this section, we will derive some preliminary insights from the cleaned African Crises data. 
+
+Firstly, we will look at the proportions of all types of financial crisies recorded. From the table below, we can see that the highest proportion of crises comes from sovereign debt in default, currency crisis, and inflation crises.
+``` {r crises proportions, echo=FALSE}
+kable(all_proportions, "latex", booktabs = T, caption="Proportion of Crises", linesep = "") %>%
+  kable_styling(latex_options = "hold_position") %>%
+  collapse_rows(columns=1, latex_hline = "major", valign = "middle")
+```
+
+Since the focus of model building is to predict a systemic crisis, we will now look into the correlations of different crises against *Syst*.  From the correlation matrix below, we can see that Banking crisies are highly correlated to Systemic crises. Similarly, Currency & Inflationary crisies are highly correlated with each other, just like Domestic & Sovereign Debt crises.
+``` {r correlations, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+correlations_all_plot
+```
+
+We will now look into the exchange rates against the US Dollar for each Country. The charts below show the movement in each country's exchange rate over time. Besides Tunisia and the Ivory Coast, we can say that African Countries have had large currency depreciations against the US Dollar, with most of these depreciations coming in towards the end of the 20th century.
+```{r fx 1, fig.align="center", fig.height=10, fig.width=10, out.width = "80%", out.height = "80%", echo=FALSE}
+exch_OT
+```
+
+To expand on this, we will now look into the annual changes in these exchange rates per Country. We can clearly see the above comments on currency depreciation across all Countries is validated. We can also see the severity of each of these currency depreciations. In the case of Zimbabwe, the below graphs provide a clearer understanding in their exchange rate history.
+```{r fx 2, fig.align="center", fig.height=10, fig.width=10, out.width = "80%", out.height = "80%", echo=FALSE}
+exch_change_OT
+```
+
+With regards to Inflation, the charts below show the movement in each country's inflation CPI rate over time. Overall, it is clear to see moments of Hyper-inflation and Hyper-deflation across all economies. Also, it appears that the 1990's were a common period of high inflation across many countries, whilst other countries had inflation spikes post-WWII (late 1940's and 50's). 
+
+Unlike the previous exchange rates plots, Tunisia and the Ivory Coast have clear information when looking at their respective charts. However, countries with extreme Hyper-inflation like Zimbabwe and Angola are harder to decipher. 
+```{r inflation 1, fig.align="center", fig.height=10, fig.width=10, out.width = "80%", out.height = "80%", echo=FALSE}
+infl_OT
+```
+
+Similarly, we will now look into annual changes in the inflation rates of each African country. In the first run of these charts, extreme values tended to skew the visuals. Thus, the below chart exclude absolute annual inflationary movements of 200% or larger, in order to provide a clearer understanding of the magnitude of CPI movements.
+```{r inflation 2, fig.align="center", fig.height=10, fig.width=10, out.width = "80%", out.height = "80%", echo=FALSE}
+infl_change_OT
+```
+
+## Model Building
+Noting the analysis that we done in previous sections of this report, in this section we will now look into bulding a few machine learning models to predict Systemic Crises in African Economies. To produce the training & testing data, the cleaned Afrian Crisies dataset was split 80/20.  There are `r nrow_africa_train` rows in the training data and `r nrow_africa_test` rows in the testing data. Models were build using the training set, and then compared to the test set via the Accuracy measure from the Confusion Matrix, in order to determine if additional parameters are need before a final model can be selected. 
+
+In deteriming the success of a machine learning model, the Confusion Matrix is a summary tool that tabulates the each combination of predictions and actuals. It shows the number of true & false positive outcomes, and the number of true & false negative outcomes. The ability of a model to correctly predict true outcomes is called the Sensitivity of a model (number of true positives over the sum of true positives and false negatives), whilst the ability of model to correctly not predict false ouctomes is called the Specificity (number of true negatives over the sum of true negatives and false positives).
+
+The Accuracy measure combines Sensitivity and Specificity into a single metric for assessing a model's predictive ability. It is calcuated as the sum of true positives & true negatives, over the sum of all positives and negatives. The higher the Accuary score, the better the model is at predicting outcomes.
+
+### GLM
+The first Machine learning method that was trialed was the Generalised Linear Model (GLM). The initial model that was run is using *Country* as the only predictor which is shown in the formula, where $c,y$ refers to each Country & Year pairing. Whislt is it not expected to use the Country's name as a predictor for a systemic crisis, this model was run as a baseline model.
+$$Model_1: \hat{Syst}_{c,y} = \alpha+\beta_cCountry_{c}$$
+The second GLM model was run using Banking Crisis (*Bank*) and Annual Echange rate changes (*EX_change*) as predictors. These variables were selected after inspecting the correlation matrix and selecting parameters that are highly correlated to *Syst*.
+$$Model_2: \hat{Syst}_{c,y} = \alpha+\beta_1Bank_{c,y}+\beta_2\Delta EX_{c,y}$$
+The third and final GLM model was run using Banking Crisis (*Bank*) and Currency Crisis (*Curr*) as predictors. Similary, these variables are selected as they were highly correlated to *Syst*. However, *Curr* has slighly higher correlation than *EX_change*.
+$$Model_3: \hat{Syst}_{c,y} = \alpha+\beta_1Bank_{c,y}+\beta_2Curr_{c,y}$$
+The accuracies of these three GLM models were compared against the test dataset, with Model 3 having the highest accuracy overall.
+``` {r glm accuracy, echo=FALSE}
+kable(GLM_Summary , "latex", booktabs = T, caption="GLM Accuracy", linesep = "") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+### Decision Tree
+
+The Decision Tree is a machine learning technique that is classifies predictions based on the most common outcomes. It is ideal for when the outcome is categorical, and since *Syst* can only be classified as "0" or "1", this technique is suitable. It can be thought of as a series of "gates" that observations must go through, before being clustered into final prediction buckets, where each "gate" is a filter based on a parameter of the tree.
+
+Once component of Decision Tree modelling that must be taking into account is the Complexity Parameter (cp) - the threshold for the number of nodes that can exist in a tree. The more nodes that are in a tree, the better the model is at fitting the data, but too many nodes can lead to over-training. Thus, a suitable Complexity Parameter must be selected that can make the Decision Tree accurately predict outcomes, but not overfit the data. In the case of this report, the below chart shows different complexity parameters against their produced accuracy against the test dataset, with cp = 0.034 resulting in the highest accuracy. This Complexity Parameter value was used to build the Decision Tree.
+``` {r dt complexity parameter, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+compelxity_parameter
+```
+
+The final decision tree is shown below, with *Bank*, *EX* and *Sov*  selected as the parameters of our tree. The majority of observations can be determined using just the *Bank* variable, with the remaining being filtered on exchange rates higher than 5.7 or if a Country is in a sovereign debt crisis. The accuracy of this Decision Tree is discussed in the Results section of this report.
+``` {r decision tree, fig.align="center", out.width = "70%", out.height = "70%", echo=FALSE}
+decision_tree_plot
+```
+
+### Random Forest
+
+In simple terms, a Random Forest is a machine learning technique where many Decision Trees are created, with each tree being different to one another due to random bootstrapping of the training set, and the average outcome of all trees is selected as the final model. It can be viewed as taking the average of a "forest" of trees, where each tree has a unique combination of parameters and nodes. This machine learning technique is more stable than a single Decision Tree since the average of a large sample of outcomes is chosen, instead of relying on one parameter set.
+
+In our model, `r number_of_trees` trees were created in the Random Forest. From the chart below, we can see that model with 6 randomly selected predictors resulted in the highest accuracy in our Random Forest. This is selected as the final model and the outcomes are discussed in the Results section of this report.
+``` {r rf random predictors, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+random_predictors
+```
+
+Whilst a Decision Tree is easier to interpret/visualise than a Random Forest, one metric that we can use to better understand this Random Forest is to look at Importance - a measure of how many times a variable has been applied in the trees of a Random Forest. 
+
+Below is a chart that shows how important each variable is in the training set. *Bank* is by far the most important parameter as it was used across all trees in the Random Forest - this is expected as it was highly correlated to *Syst* as shown in the Data Analysis section of this report. Exchange rates (values & annual changes), Inflation (values & annual changes), Sovereign debt and GPD weighted debt, are also important parameters in our forest. It is interesting to note that the Independence of an African Economy was not used in any of the `r number_of_trees` trees in the Random Forest.
+``` {r rf importance, fig.align="center", out.width = "50%", out.height = "50%", echo=FALSE}
+importance
+```
+
+
+# Results
+The final model that will be used is the Random Forest model, which accounts for the stability of economy's banking system, the volume of soverign debt, the exchange rate and the inflation rate. As shown in the table below, this Random Forest Model was selected as it had the highest Accuaracy measure against the test dataset out of the three machine learning models used.
+``` {r all accuracy, echo=FALSE}
+kable(Accuracy_Summary , "latex", booktabs = T, caption="Accuracy of all models", linesep = "") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+
+
+# Conclusion
+
+##Summary of Findings
+Accross all models, a Banking Crisis is by far the strongest indicator of a Systemic Crisis in an African Country. It is also important to note that other economic indicators such as the exchange rate to the US Dollar, inflation rate and amount of soverign debt, are also useful predictors of Systemic Crises.
+
+Based of the findings of the final Random Forest Model, it should be noted that African economies which are independent, are not necessarily more protected against financial instability than those which are not independent. Also, the amount of domestic debt is not as strong of an indicator of financial instability than soverign (foreign) debt.
+
+## Suggested Improvements
+As the focus of this report is only on the African contient, the most notiable suggestion for future improvements would be to gather a larger dataset with information from other counties outside of Africa, as this will allow us to idenfity if the discussed economic indicators of crisies are only unique to African economies. However, since the focus of this report was to only focus on the African economy, expanding the datset was beyond the initial objective. With that being said, it is believed that the general findings of this reports can still be applied to all economies. An additional future suggestion would be to apply other types of machine learning technicques like logistic regression, LDA, K-nearest neighbour, etc.
+
+
+# Acknowledgements
+
+Chiri. (2019) Africa Economic, Banking and Systemic Crisis Data: Data on Economic and Financial crises in 13 African Countries (1860 to 2014). [online] Available at: https://www.kaggle.com/chirin/africa-economic-banking-and-systemic-crisis-data [Accessed: 20 April 2020]
+
+
+Reinhart, C., Rogoff, K., Trebesch, C. and Reinhart, V. (2019) Global Crises Data by Country.
+[online] Available at: https://www.hbs.edu/behavioral-finance-and-financial-stability/data/Pages/global.aspx [Accessed: 20 April 2020].
+
+
